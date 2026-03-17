@@ -76,35 +76,51 @@ def generate_rir(rt60: float, room_dim: Optional[list] = None,
     """Generate synthetic RIR using pyroomacoustics."""
     import pyroomacoustics as pra
 
-    if room_dim is None:
-        # Random room: 3-10m each dimension
-        room_dim = [
-            random.uniform(3.0, 10.0),
-            random.uniform(3.0, 8.0),
-            random.uniform(2.5, 4.0),
-        ]
+    # Clamp RT60 to physically reasonable range
+    rt60 = max(rt60, 0.1)
 
-    # Sabine's formula for absorption
-    e_absorption, max_order = pra.inverse_sabine(rt60, room_dim)
-    if max_order > 50:
-        max_order = 50  # cap computation
+    for _attempt in range(10):
+        if room_dim is None:
+            # Random room: 3-10m each dimension
+            dims = [
+                random.uniform(3.0, 10.0),
+                random.uniform(3.0, 8.0),
+                random.uniform(2.5, 4.0),
+            ]
+        else:
+            dims = list(room_dim)
 
-    room = pra.ShoeBox(
-        room_dim, fs=sr,
-        materials=pra.Material(e_absorption),
-        max_order=max_order,
-    )
+        try:
+            e_absorption, max_order = pra.inverse_sabine(rt60, dims)
+        except ValueError:
+            # RT60 too small for this room size — try a smaller room
+            room_dim = None  # retry with new random room
+            rt60 = max(rt60, 0.15)
+            continue
 
-    # Random source and mic positions (inside room)
-    def rand_pos(dim):
-        margin = 0.5
-        return [random.uniform(margin, d - margin) for d in dim]
+        if max_order > 50:
+            max_order = 50
 
-    room.add_source(rand_pos(room_dim))
-    room.add_microphone(rand_pos(room_dim))
-    room.compute_rir()
+        room = pra.ShoeBox(
+            dims, fs=sr,
+            materials=pra.Material(e_absorption),
+            max_order=max_order,
+        )
 
-    return room.rir[0][0].astype(np.float32)
+        def rand_pos(d):
+            margin = 0.5
+            return [random.uniform(margin, di - margin) for di in d]
+
+        room.add_source(rand_pos(dims))
+        room.add_microphone(rand_pos(dims))
+        room.compute_rir()
+
+        return room.rir[0][0].astype(np.float32)
+
+    # All retries failed — return a simple impulse (no reverb)
+    rir = np.zeros(sr // 10, dtype=np.float32)
+    rir[0] = 1.0
+    return rir
 
 
 def change_speed(audio: np.ndarray, rate: float, sr: int = 16000) -> np.ndarray:
