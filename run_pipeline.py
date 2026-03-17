@@ -108,7 +108,7 @@ def run_download(args):
 
 def run_preprocess(args):
     from training.config import AudioConfig, APDLabelConfig, DegradationConfig
-    from training.dataset import generate_manifest
+    from training.manifest import generate_manifest
     from training.preprocess import collect_audio_files
 
     # Auto-detect data paths if not set (e.g. when --skip_download)

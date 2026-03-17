@@ -16,7 +16,7 @@ import argparse
 from pathlib import Path
 
 from training.config import AudioConfig, APDLabelConfig, DegradationConfig
-from training.dataset import generate_manifest
+from training.manifest import generate_manifest
 
 
 def collect_audio_files(root, extensions=(".flac", ".wav", ".mp3")) -> list[str]:

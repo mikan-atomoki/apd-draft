@@ -13,10 +13,11 @@ import random
 from dataclasses import dataclass
 from typing import Optional
 
+import math
+
 import numpy as np
 import soundfile as sf
-import torch
-import torchaudio.functional as AF
+from scipy.signal import resample_poly
 
 from .config import AudioConfig, DegradationConfig
 
@@ -38,8 +39,8 @@ def load_audio(path: str, sr: int = 16000) -> np.ndarray:
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     if orig_sr != sr:
-        audio = torch.from_numpy(audio).unsqueeze(0)
-        audio = AF.resample(audio, orig_sr, sr).squeeze(0).numpy()
+        gcd = math.gcd(sr, orig_sr)
+        audio = resample_poly(audio, sr // gcd, orig_sr // gcd).astype(np.float32)
     return audio
 
 
@@ -128,10 +129,9 @@ def change_speed(audio: np.ndarray, rate: float, sr: int = 16000) -> np.ndarray:
     if abs(rate - 1.0) < 0.01:
         return audio
     # Resample to change speed: rate > 1 = faster
-    t = torch.from_numpy(audio).unsqueeze(0)
     new_sr = int(sr * rate)
-    t = AF.resample(t, sr, new_sr).squeeze(0).numpy()
-    return t
+    gcd = math.gcd(new_sr, sr)
+    return resample_poly(audio, new_sr // gcd, sr // gcd).astype(np.float32)
 
 
 class AudioDegrader:
@@ -241,27 +241,27 @@ class AudioDegrader:
 
 # =========================================================================
 # Online augmentation (applied during training, after loading from cache)
+# torch is imported lazily — these functions are only called during
+# training, not in preprocessing workers.
 # =========================================================================
 
-def apply_gain(audio: torch.Tensor, db_range: tuple[float, float]) -> torch.Tensor:
+
+def apply_gain(audio, db_range: tuple[float, float]):
     """Random gain in dB."""
     gain_db = random.uniform(*db_range)
     return audio * (10 ** (gain_db / 20))
 
 
-def apply_shift(audio: torch.Tensor, ms_range: tuple[float, float],
-                sr: int = 16000) -> torch.Tensor:
+def apply_shift(audio, ms_range: tuple[float, float], sr: int = 16000):
     """Random circular time shift."""
+    import torch
     max_shift = int(abs(ms_range[1]) * sr / 1000)
     shift = random.randint(-max_shift, max_shift)
     return torch.roll(audio, shift, dims=-1)
 
 
-def apply_mixup(
-    audio1: torch.Tensor, label1: float,
-    audio2: torch.Tensor, label2: float,
-    alpha: float = 0.2,
-) -> tuple[torch.Tensor, float]:
+def apply_mixup(audio1, label1: float, audio2, label2: float,
+                alpha: float = 0.2):
     """Mixup augmentation."""
     lam = np.random.beta(alpha, alpha) if alpha > 0 else 1.0
     audio = lam * audio1 + (1 - lam) * audio2
