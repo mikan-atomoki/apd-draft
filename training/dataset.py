@@ -155,7 +155,7 @@ def generate_manifest(
     clean_files: list[str],
     noise_files: list[str],
     speaker_files: list[str],
-    output_dir: Path,
+    output_dir,
     manifest_name: str,
     n_samples: int,
     audio_config: AudioConfig = AudioConfig(),
@@ -188,6 +188,7 @@ def generate_manifest(
     random.seed(seed)
     np.random.seed(seed)
 
+    output_dir = Path(output_dir)
     degraded_dir = output_dir / "degraded"
     degraded_dir.mkdir(parents=True, exist_ok=True)
 

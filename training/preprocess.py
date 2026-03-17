@@ -19,8 +19,9 @@ from training.config import AudioConfig, APDLabelConfig, DegradationConfig
 from training.dataset import generate_manifest
 
 
-def collect_audio_files(root: Path, extensions=(".flac", ".wav", ".mp3")) -> list[str]:
+def collect_audio_files(root, extensions=(".flac", ".wav", ".mp3")) -> list[str]:
     """Recursively collect audio files from a directory."""
+    root = Path(root)
     files = []
     for ext in extensions:
         files.extend(str(p) for p in root.rglob(f"*{ext}"))
