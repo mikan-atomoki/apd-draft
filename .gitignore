@@ -12,6 +12,7 @@ checkpoints/
 *.pt
 *.pth
 
+.venv/
 .env
 *.log
 .vscode/
