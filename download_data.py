@@ -39,11 +39,7 @@ DATASETS = {
         "dest": DATA_DIR / "LibriSpeech",
         "description": "LibriSpeech train-clean-360 (~23GB)",
     },
-    "demand": {
-        "url": "https://zenodo.org/records/1227121/files/DEMAND.zip",
-        "dest": DATA_DIR / "DEMAND",
-        "description": "DEMAND noise dataset (~2.4GB)",
-    },
+    # DEMAND is handled separately (per-subset downloads from Zenodo API)
 }
 
 
@@ -132,21 +128,34 @@ def download_librispeech(small: bool = False):
 
 
 def download_demand():
-    """Download DEMAND noise dataset."""
-    info = DATASETS["demand"]
-    cache_dir = DATA_DIR / "_downloads"
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    """Download DEMAND noise dataset (16kHz subsets from Zenodo API)."""
+    print(f"\n--- DEMAND noise dataset (16kHz) ---")
 
-    print(f"\n--- {info['description']} ---")
-
-    dest = info["dest"]
+    dest = DATA_DIR / "DEMAND"
     if dest.exists() and count_audio_files(dest) > 10:
         print(f"  Already exists: {dest} ({count_audio_files(dest)} audio files)")
         return
 
-    archive = cache_dir / "DEMAND.zip"
-    download_file(info["url"], archive, info["description"])
-    extract_zip(archive, dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    cache_dir = DATA_DIR / "_downloads" / "demand"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # 16kHz subsets only (we resample anyway, no need for 48k)
+    subsets = [
+        "DKITCHEN_16k", "DLIVING_16k", "DWASHING_16k",
+        "NFIELD_16k", "NPARK_16k", "NRIVER_16k",
+        "OHALLWAY_16k", "OMEETING_16k", "OOFFICE_16k",
+        "PCAFETER_16k", "PRESTO_16k", "PSTATION_16k",
+        "SPSQUARE_16k", "STRAFFIC_16k",
+        "TBUS_16k", "TCAR_16k", "TMETRO_16k",
+    ]
+
+    for name in subsets:
+        url = f"https://zenodo.org/api/records/1227121/files/{name}.zip/content"
+        archive = cache_dir / f"{name}.zip"
+        print(f"\n  {name}:")
+        download_file(url, archive, name)
+        extract_zip(archive, dest)
 
     n = count_audio_files(dest)
     print(f"\nDEMAND ready: {dest} ({n} audio files)")
