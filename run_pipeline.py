@@ -22,11 +22,41 @@ Usage:
 """
 
 import argparse
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+def check_dependencies():
+    """Check all required packages are installed, auto-install if missing."""
+    required = [
+        ("torch", "torch"),
+        ("torchaudio", "torchaudio"),
+        ("numpy", "numpy"),
+        ("scipy", "scipy"),
+        ("soundfile", "soundfile"),
+        ("pystoi", "pystoi"),
+        ("pesq", "pesq"),
+        ("pyroomacoustics", "pyroomacoustics"),
+    ]
+    missing = []
+    for import_name, pip_name in required:
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing.append(pip_name)
+
+    if missing:
+        print(f"Missing packages: {', '.join(missing)}")
+        print(f"Installing from requirements.txt...")
+        req_file = Path(__file__).resolve().parent / "requirements.txt"
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", "-r", str(req_file),
+        ])
+        print()
 
 
 def fmt_elapsed(seconds: float) -> str:
@@ -72,6 +102,16 @@ def run_preprocess(args):
     from training.config import AudioConfig, APDLabelConfig, DegradationConfig
     from training.dataset import generate_manifest
     from training.preprocess import collect_audio_files
+
+    # Auto-detect data paths if not set (e.g. when --skip_download)
+    if args.demand_root is None:
+        demand = Path("data/DEMAND")
+        if demand.exists():
+            args.demand_root = str(demand)
+    if args.dns_noise_root is None:
+        dns = Path("data/dns_noise")
+        if dns.exists():
+            args.dns_noise_root = str(dns)
 
     output_dir = Path(args.manifest_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -270,6 +310,8 @@ def run_export(args):
 
 
 def main():
+    check_dependencies()
+
     parser = argparse.ArgumentParser(
         description="APD Intelligibility Estimator - Full Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
