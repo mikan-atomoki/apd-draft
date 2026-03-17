@@ -41,6 +41,8 @@ def main():
     parser.add_argument("--n_val", type=int, default=50_000)
     parser.add_argument("--n_test", type=int, default=50_000)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--n_workers", type=int, default=0,
+                        help="Number of parallel workers (0 = all CPU cores)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -98,6 +100,7 @@ def main():
             degradation_config=degradation_config,
             label_config=label_config,
             seed=args.seed + seed_offset,
+            n_workers=args.n_workers,
         )
 
     print("\nDone! Manifests saved to:", output_dir)

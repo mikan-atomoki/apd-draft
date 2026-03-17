@@ -7,11 +7,15 @@ Two-phase approach:
 """
 
 import json
+import multiprocessing as mp
+import os
 import random
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import soundfile as sf
 import torch
 from torch.utils.data import Dataset
 
@@ -151,6 +155,69 @@ def collate_with_mixup(batch: list[dict], alpha: float = 0.2,
 # Offline preprocessing: Generate manifest from raw data
 # =========================================================================
 
+def _worker_process_chunk(args):
+    """Worker function for parallel manifest generation.
+
+    Each worker processes a contiguous chunk of sample indices.
+    """
+    (
+        indices,
+        clean_files,
+        noise_files,
+        speaker_files,
+        degraded_dir,
+        audio_config,
+        degradation_config,
+        label_config,
+        seed,
+    ) = args
+
+    # Per-worker RNG seeding for reproducibility
+    random.seed(seed)
+    np.random.seed(seed)
+
+    degrader = AudioDegrader(noise_files, speaker_files, degradation_config, audio_config)
+    sr = audio_config.sample_rate
+    window = audio_config.window_samples
+
+    entries = []
+    for i in indices:
+        clean_path = random.choice(clean_files)
+        clean = load_audio(clean_path, sr)
+        clean = random_crop(clean, window)
+
+        params = degrader.sample_params()
+        degraded = degrader.degrade(clean, params)
+
+        min_len = min(len(clean), len(degraded))
+        clean_crop = clean[:min_len]
+        degraded_crop = degraded[:min_len]
+
+        apd_score, metadata = compute_apd_label(
+            clean_crop, degraded_crop, params, label_config, sr,
+        )
+
+        degraded_path = Path(degraded_dir) / f"{i:07d}.wav"
+        sf.write(str(degraded_path), degraded_crop, sr)
+
+        entry = {
+            "clean_path": str(clean_path),
+            "degraded_path": str(degraded_path),
+            "apd_score": round(apd_score, 4),
+            "stoi": round(metadata["stoi"], 4),
+            "pesq": round(metadata["pesq"], 4),
+            "snr": params.snr,
+            "masker_type": params.masker_type,
+            "rt60": params.rt60,
+            "speech_rate": params.speech_rate,
+            "sir": params.sir,
+            "n_babble_speakers": params.n_babble_speakers,
+        }
+        entries.append((i, entry))
+
+    return entries
+
+
 def generate_manifest(
     clean_files: list[str],
     noise_files: list[str],
@@ -162,11 +229,11 @@ def generate_manifest(
     degradation_config=None,
     label_config: APDLabelConfig = APDLabelConfig(),
     seed: int = 42,
+    n_workers: int = 0,
 ):
     """Generate degraded audio samples and compute pseudo-labels.
 
-    This is the CPU-intensive preprocessing step (~6-10 hours for 500k samples).
-    Run once, then train from the manifest.
+    Uses multiprocessing to parallelize across all CPU cores.
 
     Args:
         clean_files: List of paths to clean speech files
@@ -179,69 +246,57 @@ def generate_manifest(
         degradation_config: Degradation parameter ranges
         label_config: APD label configuration
         seed: Random seed
+        n_workers: Number of parallel workers (0 = all CPU cores)
     """
     from .config import DegradationConfig
 
     if degradation_config is None:
         degradation_config = DegradationConfig()
 
-    random.seed(seed)
-    np.random.seed(seed)
-
     output_dir = Path(output_dir)
     degraded_dir = output_dir / "degraded"
     degraded_dir.mkdir(parents=True, exist_ok=True)
 
-    degrader = AudioDegrader(noise_files, speaker_files, degradation_config, audio_config)
-
     manifest_path = output_dir / manifest_name
-    sr = audio_config.sample_rate
-    window = audio_config.window_samples
 
+    if n_workers <= 0:
+        n_workers = os.cpu_count() or 1
+
+    # Split indices into chunks, one per worker
+    all_indices = list(range(n_samples))
+    chunks = [all_indices[i::n_workers] for i in range(n_workers)]
+
+    # Each worker gets a different seed derived from the base seed
+    worker_args = [
+        (
+            chunk,
+            clean_files,
+            noise_files,
+            speaker_files,
+            str(degraded_dir),
+            audio_config,
+            degradation_config,
+            label_config,
+            seed + worker_id,
+        )
+        for worker_id, chunk in enumerate(chunks)
+    ]
+
+    print(f"Processing {n_samples} samples with {n_workers} workers...")
+
+    with mp.Pool(n_workers) as pool:
+        results = pool.map(_worker_process_chunk, worker_args)
+
+    # Merge results and sort by original index
+    all_entries = []
+    for chunk_entries in results:
+        all_entries.extend(chunk_entries)
+    all_entries.sort(key=lambda x: x[0])
+
+    # Write manifest in order
     with open(manifest_path, "w") as mf:
-        for i in range(n_samples):
-            # Pick random clean file and crop
-            clean_path = random.choice(clean_files)
-            clean = load_audio(clean_path, sr)
-            clean = random_crop(clean, window)
-
-            # Sample degradation and apply
-            params = degrader.sample_params()
-            degraded = degrader.degrade(clean, params)
-
-            # Ensure same length
-            min_len = min(len(clean), len(degraded))
-            clean_crop = clean[:min_len]
-            degraded_crop = degraded[:min_len]
-
-            # Compute pseudo-label
-            apd_score, metadata = compute_apd_label(
-                clean_crop, degraded_crop, params, label_config, sr,
-            )
-
-            # Save degraded audio
-            degraded_path = degraded_dir / f"{i:07d}.wav"
-            import soundfile as sf
-            sf.write(str(degraded_path), degraded_crop, sr)
-
-            # Write manifest entry
-            entry = {
-                "clean_path": str(clean_path),
-                "degraded_path": str(degraded_path),
-                "apd_score": round(apd_score, 4),
-                "stoi": round(metadata["stoi"], 4),
-                "pesq": round(metadata["pesq"], 4),
-                "snr": params.snr,
-                "masker_type": params.masker_type,
-                "rt60": params.rt60,
-                "speech_rate": params.speech_rate,
-                "sir": params.sir,
-                "n_babble_speakers": params.n_babble_speakers,
-            }
+        for i, entry in all_entries:
             mf.write(json.dumps(entry) + "\n")
-
-            if (i + 1) % 1000 == 0:
-                print(f"  [{i+1}/{n_samples}] generated")
 
     print(f"Manifest saved to {manifest_path} ({n_samples} samples)")
     return manifest_path
