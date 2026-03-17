@@ -2,14 +2,20 @@
 APD Intelligibility Estimator - Full Training Pipeline
 
 Usage:
-    # Full pipeline (preprocess -> train -> prune -> export)
-    python run_pipeline.py --librispeech_root data/LibriSpeech
+    # Full pipeline (download -> preprocess -> train -> prune -> export)
+    python run_pipeline.py
 
-    # Skip preprocessing (already done)
-    python run_pipeline.py --skip_preprocess
+    # Full pipeline with small dataset (for testing)
+    python run_pipeline.py --small
+
+    # Skip download (data already exists)
+    python run_pipeline.py --skip_download
+
+    # Skip download + preprocessing (manifests already exist)
+    python run_pipeline.py --skip_download --skip_preprocess
 
     # From pruning onward
-    python run_pipeline.py --skip_preprocess --skip_train --checkpoint checkpoints/best_model.pt
+    python run_pipeline.py --skip_download --skip_preprocess --skip_train --checkpoint checkpoints/best_model.pt
 
     # Export only
     python run_pipeline.py --export_only --checkpoint checkpoints/pruned_model.pt
@@ -37,6 +43,29 @@ def step_banner(step: int, total: int, title: str):
     print(f"\n{'='*60}")
     print(f"  Step {step}/{total}: {title}")
     print(f"{'='*60}\n")
+
+
+def run_download(args):
+    from download_data import download_librispeech, download_demand, download_dns, print_summary
+    small = getattr(args, "small", False)
+    download_librispeech(small=small)
+    download_demand()
+    download_dns()
+    print_summary()
+
+    # Auto-set data paths if not explicitly provided
+    if args.librispeech_root == "data/LibriSpeech":
+        ls = Path("data/LibriSpeech")
+        if ls.exists():
+            args.librispeech_root = str(ls)
+    if args.demand_root is None:
+        demand = Path("data/DEMAND")
+        if demand.exists():
+            args.demand_root = str(demand)
+    if args.dns_noise_root is None:
+        dns = Path("data/dns_noise")
+        if dns.exists():
+            args.dns_noise_root = str(dns)
 
 
 def run_preprocess(args):
@@ -246,14 +275,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full pipeline
-  python run_pipeline.py --librispeech_root data/LibriSpeech --demand_root data/DEMAND
+  # Full pipeline (download + preprocess + train + prune + export)
+  python run_pipeline.py
 
-  # Skip preprocessing (manifests already exist)
-  python run_pipeline.py --skip_preprocess
+  # Quick test with small dataset
+  python run_pipeline.py --small
+
+  # Data already downloaded
+  python run_pipeline.py --skip_download
 
   # Resume from pruning
-  python run_pipeline.py --skip_preprocess --skip_train --checkpoint checkpoints/best_model.pt
+  python run_pipeline.py --skip_download --skip_preprocess --skip_train --checkpoint checkpoints/best_model.pt
 
   # Export only
   python run_pipeline.py --export_only --checkpoint checkpoints/pruned_model.pt
@@ -262,8 +294,12 @@ Examples:
 
     # Pipeline control
     pipe = parser.add_argument_group("Pipeline control")
+    pipe.add_argument("--skip_download", action="store_true",
+                      help="Skip data download")
     pipe.add_argument("--skip_preprocess", action="store_true",
                       help="Skip data preprocessing")
+    pipe.add_argument("--small", action="store_true",
+                      help="Use small dataset (LibriSpeech train-clean-100 only)")
     pipe.add_argument("--skip_train", action="store_true",
                       help="Skip training")
     pipe.add_argument("--skip_prune", action="store_true",
@@ -310,12 +346,15 @@ Examples:
     args = parser.parse_args()
 
     if args.export_only:
+        args.skip_download = True
         args.skip_preprocess = True
         args.skip_train = True
         args.skip_prune = True
 
     # Determine steps
     steps = []
+    if not getattr(args, "skip_download", False):
+        steps.append(("Download", run_download))
     if not args.skip_preprocess:
         steps.append(("Preprocess", run_preprocess))
     if not args.skip_train:
