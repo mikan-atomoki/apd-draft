@@ -4,5 +4,6 @@ numpy
 scipy
 soundfile
 pystoi
-pesq
 pyroomacoustics
+# pesq is optional: improves label quality but requires C compiler on Windows.
+# Install manually if available: pip install pesq

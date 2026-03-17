@@ -39,8 +39,8 @@ def check_dependencies():
         ("scipy", "scipy"),
         ("soundfile", "soundfile"),
         ("pystoi", "pystoi"),
-        ("pesq", "pesq"),
         ("pyroomacoustics", "pyroomacoustics"),
+        # pesq is optional (requires C compiler, often fails on Windows)
     ]
     missing = []
     for import_name, pip_name in required:
@@ -56,6 +56,14 @@ def check_dependencies():
         subprocess.check_call([
             sys.executable, "-m", "pip", "install", "-r", str(req_file),
         ])
+        print()
+
+    # Optional: pesq
+    try:
+        __import__("pesq")
+    except ImportError:
+        print("NOTE: pesq not installed (needs C compiler). Using STOI-only fallback for labels.")
+        print("      To install: pip install pesq")
         print()
 
 
