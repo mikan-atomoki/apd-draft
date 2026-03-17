@@ -10,7 +10,6 @@ import json
 import multiprocessing as mp
 import os
 import random
-from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -158,14 +157,18 @@ def collate_with_mixup(batch: list[dict], alpha: float = 0.2,
 def _worker_process_chunk(args):
     """Worker function for parallel manifest generation.
 
-    Each worker processes a contiguous chunk of sample indices.
+    Each worker processes a chunk of sample indices and writes results
+    to a temporary file to avoid accumulating entries in memory.
+    Returns the path to the temp file.
     """
     (
+        worker_id,
         indices,
         clean_files,
         noise_files,
         speaker_files,
         degraded_dir,
+        tmp_dir,
         audio_config,
         degradation_config,
         label_config,
@@ -180,42 +183,47 @@ def _worker_process_chunk(args):
     sr = audio_config.sample_rate
     window = audio_config.window_samples
 
-    entries = []
-    for i in indices:
-        clean_path = random.choice(clean_files)
-        clean = load_audio(clean_path, sr)
-        clean = random_crop(clean, window)
+    tmp_path = Path(tmp_dir) / f"worker_{worker_id:03d}.jsonl"
+    with open(tmp_path, "w") as tf:
+        for count, i in enumerate(indices):
+            clean_path = random.choice(clean_files)
+            clean = load_audio(clean_path, sr)
+            clean = random_crop(clean, window)
 
-        params = degrader.sample_params()
-        degraded = degrader.degrade(clean, params)
+            params = degrader.sample_params()
+            degraded = degrader.degrade(clean, params)
 
-        min_len = min(len(clean), len(degraded))
-        clean_crop = clean[:min_len]
-        degraded_crop = degraded[:min_len]
+            min_len = min(len(clean), len(degraded))
+            clean_crop = clean[:min_len]
+            degraded_crop = degraded[:min_len]
 
-        apd_score, metadata = compute_apd_label(
-            clean_crop, degraded_crop, params, label_config, sr,
-        )
+            apd_score, metadata = compute_apd_label(
+                clean_crop, degraded_crop, params, label_config, sr,
+            )
 
-        degraded_path = Path(degraded_dir) / f"{i:07d}.wav"
-        sf.write(str(degraded_path), degraded_crop, sr)
+            degraded_path = Path(degraded_dir) / f"{i:07d}.wav"
+            sf.write(str(degraded_path), degraded_crop, sr)
 
-        entry = {
-            "clean_path": str(clean_path),
-            "degraded_path": str(degraded_path),
-            "apd_score": round(apd_score, 4),
-            "stoi": round(metadata["stoi"], 4),
-            "pesq": round(metadata["pesq"], 4),
-            "snr": params.snr,
-            "masker_type": params.masker_type,
-            "rt60": params.rt60,
-            "speech_rate": params.speech_rate,
-            "sir": params.sir,
-            "n_babble_speakers": params.n_babble_speakers,
-        }
-        entries.append((i, entry))
+            entry = {
+                "idx": i,
+                "clean_path": str(clean_path),
+                "degraded_path": str(degraded_path),
+                "apd_score": round(apd_score, 4),
+                "stoi": round(metadata["stoi"], 4),
+                "pesq": round(metadata["pesq"], 4),
+                "snr": params.snr,
+                "masker_type": params.masker_type,
+                "rt60": params.rt60,
+                "speech_rate": params.speech_rate,
+                "sir": params.sir,
+                "n_babble_speakers": params.n_babble_speakers,
+            }
+            tf.write(json.dumps(entry) + "\n")
 
-    return entries
+            if (count + 1) % 1000 == 0:
+                print(f"  [Worker {worker_id}] {count+1}/{len(indices)} generated")
+
+    return str(tmp_path)
 
 
 def generate_manifest(
@@ -262,18 +270,23 @@ def generate_manifest(
     if n_workers <= 0:
         n_workers = os.cpu_count() or 1
 
-    # Split indices into chunks, one per worker
+    # Split indices into contiguous chunks, one per worker
     all_indices = list(range(n_samples))
     chunks = [all_indices[i::n_workers] for i in range(n_workers)]
+
+    tmp_dir = output_dir / "_tmp_workers"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # Each worker gets a different seed derived from the base seed
     worker_args = [
         (
+            worker_id,
             chunk,
             clean_files,
             noise_files,
             speaker_files,
             str(degraded_dir),
+            str(tmp_dir),
             audio_config,
             degradation_config,
             label_config,
@@ -285,17 +298,24 @@ def generate_manifest(
     print(f"Processing {n_samples} samples with {n_workers} workers...")
 
     with mp.Pool(n_workers) as pool:
-        results = pool.map(_worker_process_chunk, worker_args)
+        tmp_paths = pool.map(_worker_process_chunk, worker_args)
 
-    # Merge results and sort by original index
+    # Merge temp files: read entries, sort by original index, write manifest
+    print("Merging worker outputs...")
     all_entries = []
-    for chunk_entries in results:
-        all_entries.extend(chunk_entries)
+    for tmp_path in tmp_paths:
+        with open(tmp_path) as f:
+            for line in f:
+                entry = json.loads(line)
+                idx = entry.pop("idx")
+                all_entries.append((idx, entry))
+        os.remove(tmp_path)
+    tmp_dir.rmdir()
+
     all_entries.sort(key=lambda x: x[0])
 
-    # Write manifest in order
     with open(manifest_path, "w") as mf:
-        for i, entry in all_entries:
+        for _, entry in all_entries:
             mf.write(json.dumps(entry) + "\n")
 
     print(f"Manifest saved to {manifest_path} ({n_samples} samples)")
