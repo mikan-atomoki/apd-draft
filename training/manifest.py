@@ -8,6 +8,7 @@ import json
 import multiprocessing as mp
 import os
 import random
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -174,7 +175,7 @@ def generate_manifest(
                 idx = entry.pop("idx")
                 all_entries.append((idx, entry))
         os.remove(tmp_path)
-    tmp_dir.rmdir()
+    shutil.rmtree(tmp_dir, ignore_errors=True)
 
     all_entries.sort(key=lambda x: x[0])
 
