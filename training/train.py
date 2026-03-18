@@ -173,7 +173,7 @@ def train(cfg: Config):
         boundary_weight=cfg.train.boundary_loss_weight,
         boundary_thresholds=cfg.train.boundary_thresholds,
         boundary_sigma=cfg.train.boundary_sigma,
-    )
+    ).to(device)
 
     # Optimizer
     optimizer = torch.optim.AdamW(
