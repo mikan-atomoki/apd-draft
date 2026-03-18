@@ -7,6 +7,7 @@ Two-phase approach:
 """
 
 import json
+import os
 import random
 from pathlib import Path
 from typing import Optional
@@ -64,6 +65,7 @@ class APDManifestDataset(Dataset):
         self.audio_config = audio_config
         self.augmentation = augmentation
         self.return_metadata = return_metadata
+        self.base_dir = Path(manifest_path).parent
 
         # Load manifest
         self.entries = []
@@ -79,8 +81,11 @@ class APDManifestDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         entry = self.entries[idx]
 
-        # Load degraded audio
-        audio = load_audio(entry["degraded_path"], self.audio_config.sample_rate)
+        # Load degraded audio (resolve relative paths against manifest dir)
+        degraded_path = entry["degraded_path"]
+        if not os.path.isabs(degraded_path):
+            degraded_path = str(self.base_dir / degraded_path)
+        audio = load_audio(degraded_path, self.audio_config.sample_rate)
         audio = random_crop(audio, self.audio_config.window_samples)
         audio = torch.from_numpy(audio).float()
         label = float(entry["apd_score"])

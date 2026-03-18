@@ -168,6 +168,7 @@ def run_preprocess(args):
             degradation_config=degradation_config,
             label_config=label_config,
             seed=args.seed + seed_offset,
+            n_workers=args.n_workers,
         )
         print(f"  Done in {fmt_elapsed(time.time() - t0)}")
 
@@ -366,6 +367,8 @@ Examples:
     data.add_argument("--n_train", type=int, default=500_000)
     data.add_argument("--n_val", type=int, default=50_000)
     data.add_argument("--n_test", type=int, default=50_000)
+    data.add_argument("--n_workers", type=int, default=0,
+                      help="Number of parallel workers for preprocessing (0 = auto)")
 
     # Training
     train = parser.add_argument_group("Training")
